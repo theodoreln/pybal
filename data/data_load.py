@@ -1,138 +1,42 @@
 # Loading data for the pybal package
 import os
+import re
+import sys
 import gams
+import warnings
 import pandas as pd
 import gams.transfer as gt
 
 from pathlib import Path
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Union, Any
 
+# Import from data module
+sys.path.append(str(Path(__file__).parent.parent))
+from data.scenario import ScenarioManager, ScenarioConfig
+
+@dataclass
 class DataLoader:
-    """
-    DataLoader class to load and process GDX files from GAMS.
-    """
+    path : Path 
+    container : Optional[gt.Container] = None
+    data : Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.container = gt.Container(str(self.path))
+        self.data = self.container.data
+
+    def __repr__(self):
+        return f"DataLoader(path={self.path.name}, symbols={len(self.container.data)})"
     
-    # Default data directory relative to this file
-    DEFAULT_DATA_DIR = Path(__file__).parent.parent / "pybal_test" / "files"
-    
-    def __init__(self, file_path=None, data_dir=None):
+    def get_symbol(self, symbol_name: str) -> pd.DataFrame:
         """
-        Initialize DataLoader.
-        
-        Args:
-            file_path: Specific file to load (can be relative to data_dir or absolute)
-            data_dir: Directory containing data files (defaults to ../pybal_test/files/)
-        """
-        self.data_dir = Path(data_dir) if data_dir else self.DEFAULT_DATA_DIR
-        self.file_path = file_path
-        self.container = None  # Will hold the gams.transfer Container
-    
-    # We could put that in utils later
-    def get_file_path(self, filename=None):
-        """
-        Get the full path to a file in the data directory.
-        
-        Args:
-            filename: Name of the file (if None, uses self.file_path)
-            
-        Returns:
-            Path object to the file
-        """
-        fname = filename if filename else self.file_path
-        if fname is None:
-            raise ValueError("No file specified")
-        
-        file_path = Path(fname)
-        
-        # If not absolute, treat as relative to data_dir
-        if not file_path.is_absolute():
-            file_path = self.data_dir / file_path
-        
-        if not file_path.exists():
-            raise FileNotFoundError(f"The file {file_path} does not exist.")
-        
-        return file_path
-    
-    # We could put that in utils later
-    def list_available_files(self, pattern="*.gdx"):
-        """
-        List all available files in the data directory.
-        
-        Args:
-            pattern: Glob pattern to match files (default: *.gdx)
-            
-        Returns:
-            List of file paths
-        """
-        if not self.data_dir.exists():
-            raise FileNotFoundError(f"Data directory {self.data_dir} does not exist.")
-        
-        return list(self.data_dir.glob(pattern))
-    
-    def load_gdx(self, filename=None):
-        """
-        Load a GDX file and return the GAMS transfer Container.
-        
-        Args:
-            filename: Name of the GDX file to load
-            
-        Returns:
-            gams.transfer Container object
-        """
-        file_path = self.get_file_path(filename)
-        
-        # Load GDX file into GAMS transfer Container
-        container = gt.Container(str(file_path))
-        self.container = container
-        
-        return container
-    
-    def gdx_to_dataframes(self, filename=None):
-        """
-        Convert all symbols in a GDX file to pandas DataFrames.
-        
-        Args:
-            filename: Name of the GDX file to load
-            
-        Returns:
-            Dictionary mapping symbol names to DataFrames
-        """
-        container = self.load_gdx(filename) if filename else self.container
-        
-        if container is None:
-            raise ValueError("No container loaded. Call load_gdx() first or provide filename.")
-        
-        dataframes = {}
-        
-        # Extract all symbols from the container
-        # gams.transfer makes this much simpler - each symbol has a .records attribute
-        # that is already a pandas DataFrame
-        for symbol_name in container.data.keys():
-            symbol = container[symbol_name]
-            
-            # Get the records as a DataFrame
-            # For Sets, Parameters, Variables, and Equations
-            if hasattr(symbol, 'records') and symbol.records is not None:
-                dataframes[symbol_name] = symbol.records.copy()
-        
-        return dataframes
-    
-    def get_symbol_as_dataframe(self, symbol_name, filename=None):
-        """
-        Get a specific symbol from a GDX file as a DataFrame.
+        Get a specific symbol from the container as a DataFrame.
         
         Args:
             symbol_name: Name of the symbol to extract
-            filename: Name of the GDX file (if not already loaded)
-            
         Returns:
             DataFrame containing the symbol data
         """
-        if filename:
-            self.load_gdx(filename)
-        
-        if self.container is None:
-            raise ValueError("No container loaded.")
-        
         if symbol_name not in self.container.data:
             raise KeyError(f"Symbol '{symbol_name}' not found in container.")
         
@@ -143,71 +47,110 @@ class DataLoader:
             return symbol.records.copy()
         else:
             return pd.DataFrame()  # Return empty DataFrame if no records
+
+class DataManager:
+    def __init__(self, scenario_manager: ScenarioManager):
+        self.manager = scenario_manager
+        self.scenarios_names = scenario_manager.scenarios_names
+        self.output_years = scenario_manager.output_years
+
+        self.input_data : Dict[str, DataLoader] = {}
+        self.output_data : Dict[str, DataLoader] = {}
+        self.output_year_data : Dict[str, DataLoader] = {}
+
+        self._symbol_to_file : dict = {}
+        self._symbol_summary : dict = {}
+
+        if scenario_manager :
+            self._initialyze_data()
+            self._symbol_mapping()
+
+    def __repr__(self):
+        return f"DataManager(scenarios={len(self.manager.scenarios)})"
     
-    def get_symbol_info(self, symbol_name=None):
-        """
-        Get information about symbols in the container.
-        
-        Args:
-            symbol_name: Name of specific symbol (if None, returns info for all symbols)
-            
-        Returns:
-            Dictionary with symbol information (type, dimension, number of records, etc.)
-        """
-        if self.container is None:
-            raise ValueError("No container loaded.")
-        
-        if symbol_name:
-            if symbol_name not in self.container.data:
-                raise KeyError(f"Symbol '{symbol_name}' not found in container.")
-            
-            symbol = self.container[symbol_name]
-            return {
-                'name': symbol.name,
-                'type': type(symbol),
-                'dimension': symbol.dimension,
-                'number_records': symbol.number_records,
-                'domain_names': symbol.domain_names if hasattr(symbol, 'domain_names') else None,
-                'description': symbol.description if hasattr(symbol, 'description') else None
-            }
+    def _initialyze_data(self):
+        # Load input data for all scenarios
+        dict = self.manager.get_all_input_files()
+        for scenario_name, path in dict.items():
+            self.input_data[scenario_name] = DataLoader(path)
+
+        # Load output data for all scenarios
+        dict = self.manager.get_all_output_files()
+        for scenario_name, path in dict.items():
+            self.output_data[scenario_name] = DataLoader(path)
+
+        # Load output year data for all scenarios
+        dict = self.manager.get_all_output_year_files()
+        for scenario_name, year_dict in dict.items():
+            for year, path in year_dict.items():
+                self.output_year_data[(scenario_name, year)] = DataLoader(path)
+
+    def _symbol_mapping(self):
+        # Input data
+        for scen_name, data_loader in self.input_data.items():
+            for symbol_name in data_loader.data.keys():
+                self._symbol_to_file[symbol_name] = 'input'
+        # Output data
+        for scen_name, data_loader in self.output_data.items(): 
+            for symbol_name in data_loader.data.keys():
+                self._symbol_to_file[symbol_name] = 'output'
+        # Output year data
+        for scen_name, data_loader in self.output_year_data.items(): 
+            for symbol_name in data_loader.data.keys():
+                self._symbol_to_file[symbol_name] = 'output_year'
+
+    def get_symbol(self, symbol_name: str) -> pd.DataFrame:
+        if symbol_name not in self._symbol_to_file:
+            raise KeyError(f"Symbol '{symbol_name}' not found in any data.")
+        data_type = self._symbol_to_file[symbol_name]
+
+        frames = []
+        if data_type == 'input':
+            for scen_name, data_loader in self.input_data.items():
+                if symbol_name in data_loader.data:
+                    df = data_loader.get_symbol(symbol_name)
+                    df['Scenario'] = scen_name
+                    cols = df.columns.tolist()
+                    if cols[0] != 'Scenario':
+                        cols = ['Scenario'] + [c for c in cols if c != 'Scenario']
+                        df = df[cols]
+                    frames.append(df)
+        elif data_type == 'output':
+            for scen_name, data_loader in self.output_data.items():
+                if symbol_name in data_loader.data:
+                    df = data_loader.get_symbol(symbol_name)
+                    df['Scenario'] = scen_name
+                    cols = df.columns.tolist()
+                    if cols[0] != 'Scenario':
+                        cols = ['Scenario'] + [c for c in cols if c != 'Scenario']
+                        df = df[cols]
+                    frames.append(df)
+        elif data_type == 'output_year':
+            for (scen_name, year), data_loader in self.output_year_data.items():
+                if symbol_name in data_loader.data:
+                    df = data_loader.get_symbol(symbol_name)
+                    df['Scenario'] = scen_name
+                    df['Year'] = year
+                    cols = df.columns.tolist()
+                    # Ensure Scenario is first and Year is second
+                    new_cols = ['Scenario', 'Year'] + [c for c in cols if c not in ('Scenario', 'Year')]
+                    df = df[new_cols]
+                    frames.append(df)
         else:
-            # Return info for all symbols
-            info = {}
-            for name in self.container.data.keys():
-                symbol = self.container[name]
-                info[name] = {
-                    'type': type(symbol),
-                    'dimension': symbol.dimension,
-                    'number_records': symbol.number_records,
-                    'domain_names': symbol.domain_names if hasattr(symbol, 'domain_names') else None,
-                    'description': symbol.description if hasattr(symbol, 'description') else None
-                }
-            return info
+            raise ValueError(f"Unknown data type '{data_type}' for symbol '{symbol_name}'.")
+        if frames:
+            return pd.concat(frames, ignore_index=True)
+        else:
+            return pd.DataFrame()  # Return empty DataFrame if no data found
+
 
 
 if __name__ == "__main__":
-    # Example usage
-    loader = DataLoader()
-    
-    # List available files
-    print("Available GDX files:")
-    for file in loader.list_available_files():
-        print(f"  - {file.name}")
-    
-    # Load a specific file
-    print("\nLoading bb3_AHC-output.gdx...")
-    container = loader.load_gdx("bb3_AHC-output.gdx")
-    print(f"Loaded container with {len(container.data)} symbols")
+    print("Load all scenarios and show categorized files")
+    print("-" * 60)
+    Manager = ScenarioManager()
+    Data = DataManager(Manager)
+    ScenData = Data.input_data["Scen1"]
+    df = ScenData.get_symbol("IHOURSINST")
+    print(df.head())
 
-    # # Get info about all symbols
-    # print("\nSymbol Information:")
-    # info = loader.get_symbol_info()
-    # for name, details in info.items():
-    #     print(f"  - {name}: {details['type']}, dimension={details['dimension']}, records={details['number_records']}")
-    
-    # # Convert all symbols to dataframes
-    # print("\nConverting to DataFrames...")
-    # dfs = loader.gdx_to_dataframes()
-    # print(f"Created {len(dfs)} DataFrames")
-    # for name, df in dfs.items():
-    #     print(f"  - {name}: {df.shape}")

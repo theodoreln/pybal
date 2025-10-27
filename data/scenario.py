@@ -133,7 +133,7 @@ class ScenarioManager:
         if auto_discover:
             self._discover_scenarios()
             self.scenarios_names = list(self.scenarios.keys())
-            #self.output_years 
+            self.output_years = set([item for config in self.scenarios.values() if config.output_years != [] for item in config.output_years])
 
     def __repr__(self):
         return (f"ScenarioManager(root_path='{self.root_path}', "
