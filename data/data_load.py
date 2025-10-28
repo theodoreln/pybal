@@ -101,16 +101,18 @@ class DataManager:
         for scen_name, data_loader in self.output_year_data.items(): 
             for symbol_name in data_loader.data.keys():
                 self._symbol_to_file[symbol_name] = 'output_year'
-                self._symbol_in_scenarios.add((scen_name[0], symbol_name))
+                self._symbol_in_scenarios.add((scen_name, symbol_name))
 
     def get_symbol(self, symbol_name: str, scenarios: Union[str, List[str]] = None) -> pd.DataFrame:
         # If no scenarios provided, consider all scenarios
+        scenarios = [scenarios] if isinstance(scenarios, str) else scenarios
         if scenarios is None:
             scenarios = self.scenarios_names
-        # Else verify that the scenarios exist
         elif not all(s in self.scenarios_names for s in scenarios):
             missing = [s for s in scenarios if s not in self.scenarios_names]
             raise KeyError(f"Scenarios not found: {missing}")
+        else:
+            scenarios = set(scenarios)
 
         # Verify that the symbol exists in any data
         if symbol_name not in self._symbol_to_file:
@@ -124,6 +126,7 @@ class DataManager:
             considered_data = self.output_data
         elif data_type == 'output_year':
             considered_data = self.output_year_data
+            scenarios = set((s, y) for s in scenarios for y in self.output_years)
         else:
             raise ValueError(f"Unknown data type '{data_type}' for symbol '{symbol_name}'.")
         
@@ -133,7 +136,8 @@ class DataManager:
             else :
                 data_loader = considered_data[scen_name]
                 df = data_loader.get_symbol(symbol_name)
-                df['Scenario'] = scen_name
+                scen = scen_name[0] if data_type == 'output_year' else scen_name
+                df['Scenario'] = scen
                 df = df[['Scenario'] + [c for c in df.columns.tolist() if c != 'Scenario']]
                 frames.append(df)
 
@@ -149,7 +153,6 @@ if __name__ == "__main__":
     print("-" * 60)
     Manager = ScenarioManager()
     Data = DataManager(Manager)
-    ScenData = Data.input_data["Scen1"]
-    df = ScenData.get_symbol("IHOURSINST")
+    df = Data.get_symbol("IHOURSINST", ['Scen1', 'Scen2'])
     print(df.head())
 

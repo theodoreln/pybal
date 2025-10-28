@@ -132,7 +132,7 @@ class ScenarioManager:
         
         if auto_discover:
             self._discover_scenarios()
-            self.scenarios_names = list(self.scenarios.keys())
+            self.scenarios_names = set(self.scenarios.keys())
             self.output_years = set([item for config in self.scenarios.values() if config.output_years != [] for item in config.output_years])
 
     def __repr__(self):
@@ -369,7 +369,7 @@ class ScenarioManager:
 
         # Replace the internal scenarios dict with the filtered result
         self.scenarios = filtered
-        self.scenarios_names = list(self.scenarios.keys())
+        self.scenarios_names = set(self.scenarios.keys())
 
         return self.scenarios
     
@@ -443,7 +443,7 @@ if __name__ == "__main__":
     print("\n\nExample 2: Work with a specific scenario")
     print("-" * 60)
     if manager.scenarios_names:
-        scenario_name = manager.scenarios_names[0]
+        scenario_name = next(iter(manager.scenarios_names))
         scenario = manager.scenarios[scenario_name]
         print(f"Scenario: {scenario.name}")
         print(f"  Input file: {scenario.input_path.name if scenario.input_path else 'None'}")
