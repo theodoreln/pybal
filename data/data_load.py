@@ -9,7 +9,7 @@ import gams.transfer as gt
 
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Union, Any
+from typing import List, Set, Dict, Optional, Union, Any
 
 # Import from data module
 sys.path.append(str(Path(__file__).parent.parent))
@@ -59,7 +59,8 @@ class DataManager:
         self.output_year_data : Dict[str, DataLoader] = {}
 
         self._symbol_to_file : dict = {}
-        self._symbol_summary : dict = {}
+        self._symbol_in_scenarios : Set[tuple] = set()
+        #self._symbol_summary : dict = {}
 
         if scenario_manager :
             self._initialyze_data()
@@ -90,54 +91,52 @@ class DataManager:
         for scen_name, data_loader in self.input_data.items():
             for symbol_name in data_loader.data.keys():
                 self._symbol_to_file[symbol_name] = 'input'
+                self._symbol_in_scenarios.add((scen_name, symbol_name))
         # Output data
         for scen_name, data_loader in self.output_data.items(): 
             for symbol_name in data_loader.data.keys():
                 self._symbol_to_file[symbol_name] = 'output'
+                self._symbol_in_scenarios.add((scen_name, symbol_name))
         # Output year data
         for scen_name, data_loader in self.output_year_data.items(): 
             for symbol_name in data_loader.data.keys():
                 self._symbol_to_file[symbol_name] = 'output_year'
+                self._symbol_in_scenarios.add((scen_name[0], symbol_name))
 
-    def get_symbol(self, symbol_name: str) -> pd.DataFrame:
+    def get_symbol(self, symbol_name: str, scenarios: Union[str, List[str]] = None) -> pd.DataFrame:
+        # If no scenarios provided, consider all scenarios
+        if scenarios is None:
+            scenarios = self.scenarios_names
+        # Else verify that the scenarios exist
+        elif not all(s in self.scenarios_names for s in scenarios):
+            missing = [s for s in scenarios if s not in self.scenarios_names]
+            raise KeyError(f"Scenarios not found: {missing}")
+
+        # Verify that the symbol exists in any data
         if symbol_name not in self._symbol_to_file:
             raise KeyError(f"Symbol '{symbol_name}' not found in any data.")
-        data_type = self._symbol_to_file[symbol_name]
-
+        
         frames = []
+        data_type = self._symbol_to_file[symbol_name]
         if data_type == 'input':
-            for scen_name, data_loader in self.input_data.items():
-                if symbol_name in data_loader.data:
-                    df = data_loader.get_symbol(symbol_name)
-                    df['Scenario'] = scen_name
-                    cols = df.columns.tolist()
-                    if cols[0] != 'Scenario':
-                        cols = ['Scenario'] + [c for c in cols if c != 'Scenario']
-                        df = df[cols]
-                    frames.append(df)
+            considered_data = self.input_data
         elif data_type == 'output':
-            for scen_name, data_loader in self.output_data.items():
-                if symbol_name in data_loader.data:
-                    df = data_loader.get_symbol(symbol_name)
-                    df['Scenario'] = scen_name
-                    cols = df.columns.tolist()
-                    if cols[0] != 'Scenario':
-                        cols = ['Scenario'] + [c for c in cols if c != 'Scenario']
-                        df = df[cols]
-                    frames.append(df)
+            considered_data = self.output_data
         elif data_type == 'output_year':
-            for (scen_name, year), data_loader in self.output_year_data.items():
-                if symbol_name in data_loader.data:
-                    df = data_loader.get_symbol(symbol_name)
-                    df['Scenario'] = scen_name
-                    df['Year'] = year
-                    cols = df.columns.tolist()
-                    # Ensure Scenario is first and Year is second
-                    new_cols = ['Scenario', 'Year'] + [c for c in cols if c not in ('Scenario', 'Year')]
-                    df = df[new_cols]
-                    frames.append(df)
+            considered_data = self.output_year_data
         else:
             raise ValueError(f"Unknown data type '{data_type}' for symbol '{symbol_name}'.")
+        
+        for scen_name in scenarios:
+            if scen_name not in considered_data.keys() or (scen_name, symbol_name) not in self._symbol_in_scenarios:
+                print(f"Symbol '{symbol_name}' not found in scenario '{scen_name}'. Skipping.")
+            else :
+                data_loader = considered_data[scen_name]
+                df = data_loader.get_symbol(symbol_name)
+                df['Scenario'] = scen_name
+                df = df[['Scenario'] + [c for c in df.columns.tolist() if c != 'Scenario']]
+                frames.append(df)
+
         if frames:
             return pd.concat(frames, ignore_index=True)
         else:
