@@ -15,6 +15,8 @@ class ScenarioConfig:
         name: Scenario name (folder name)
         path: Path to the scenario folder
         balopt_path: Path to the balopt.opt file
+        BM_path : Path to the BM gdx file '*-BM.gdx'
+        Basis_path : Path to the basis gdx file '*-Basis.gdx'
         input_path: Path to the input gdx file '*-input.gdx'
         output_path: Path to the output gdx file '*-output.gdx'
         output_year_path: Dict of files ending with 'output-YYYY.gdx' -> {year: path}
@@ -24,6 +26,8 @@ class ScenarioConfig:
     name: str
     path: Path
     balopt_path: Path
+    BM_path: Path = None
+    Basis_path: Path = None
     input_path: Path = None
     output_path: Path = None
     output_year_path: Dict[str, Path] = field(default_factory=dict)  # key is year string
@@ -32,18 +36,16 @@ class ScenarioConfig:
     gdx_files: Dict[str, Path] = field(default_factory=dict)
     
     def __post_init__(self):
-        """Convert paths to Path objects and categorize GDX files."""
-        self.path = Path(self.path)
-        self.balopt_path = Path(self.balopt_path)
-        
-        # Convert all paths to Path objects
-        self.gdx_files = {name: Path(path) for name, path in self.gdx_files.items()}
-        
-        # Categorize files if gdx_files is provided but categories are empty
-        if self.gdx_files and not (self.input_path or self.output_path or
-                                    self.output_year_path or self.output_other_path):
-            self._categorize_files()
-            self.output_years = list(self.output_year_path.keys())
+        """Categorize GDX files."""
+
+        # Categorize gdx files based on naming patterns
+        self._categorize_files()
+        self.output_years = list(self.output_year_path.keys())
+        self.key_path_map = {'BM': self.BM_path,
+                             'Basis': self.Basis_path,
+                             'input': self.input_path,
+                             'output': self.output_path,
+                             'output_year': self.output_year_path}
 
     def __repr__(self):
         return (f"ScenarioConfig(name='{self.name}', "
@@ -54,6 +56,8 @@ class ScenarioConfig:
         Categorize GDX files based on naming patterns.
         
         Patterns:
+        - *-BM.gdx -> BM_path
+        - *-Basis.gdx -> Basis_path
         - *-input.gdx -> input_file
         - *-output.gdx -> output_file
         - *-output-YYYY.gdx -> output_year_file (with year extracted)
@@ -63,8 +67,6 @@ class ScenarioConfig:
         output_year_pattern = re.compile(r'^(.+)-output-(\d{4})\.gdx$', re.IGNORECASE)
         
         for filename, filepath in self.gdx_files.items():
-            filepath = Path(filepath)
-            filename_lower = filename.lower()
             
             # Check for output-year pattern first (more specific)
             match = output_year_pattern.match(filename)
@@ -73,12 +75,20 @@ class ScenarioConfig:
                 self.output_year_path[year] = filepath
             
             # Check for output files (but not output-year)
-            elif filename_lower.endswith('-output.gdx'):
+            elif filename.endswith('-output.gdx'):
                 self.output_path = filepath
 
             # Check for input files
-            elif filename_lower.endswith('-input.gdx'):
+            elif filename.endswith('-input.gdx'):
                 self.input_path = filepath
+
+            # Check for BM files
+            elif filename.endswith('-BM.gdx'):
+                self.BM_path = filepath
+
+            # Check for Basis files
+            elif filename.endswith('-Basis.gdx'):
+                self.Basis_path = filepath
 
             # Everything else
             else:
@@ -134,6 +144,11 @@ class ScenarioManager:
             self._discover_scenarios()
             self.scenarios_names = set(self.scenarios.keys())
             self.output_years = set([item for config in self.scenarios.values() if config.output_years != [] for item in config.output_years])
+            self.key_func_map = {'input': self.get_all_input_files,
+                                  'BM': self.get_all_BM_files,
+                                  'Basis': self.get_all_Basis_files,
+                                  'output': self.get_all_output_files,
+                                  'output_year': self.get_all_output_year_files}
 
     def __repr__(self):
         return (f"ScenarioManager(root_path='{self.root_path}', "
@@ -174,7 +189,7 @@ class ScenarioManager:
         
         # Find balopt file
         balopt_files = list(scenario_path.glob('balopt.opt')) + list(scenario_path.glob('balopt.OPT'))
-        balopt_path = balopt_files[0]
+        balopt_path = Path(balopt_files[0])
         
         # Look for output folder
         output_dir = scenario_path / "output"
@@ -183,7 +198,7 @@ class ScenarioManager:
         gdx_files = {}
         if output_dir.exists() and output_dir.is_dir():
             for gdx_file in output_dir.glob("*.gdx"):
-                gdx_files[gdx_file.name] = gdx_file
+                gdx_files[gdx_file.name] = Path(gdx_file)
         
         # Create scenario config
         config = ScenarioConfig(
@@ -257,6 +272,36 @@ class ScenarioManager:
         
         return result
     
+    def get_all_BM_files(self) -> Dict[str, Path]:
+        """
+        Get all BM files (ending with -BM.gdx) from all scenarios.
+        
+        Returns:
+            Dictionary mapping scenario names to their BM file paths
+        """
+        result = {}
+        for scenario_name, config in self.scenarios.items():
+            BM_file = config.BM_path
+            if BM_file:
+                result[scenario_name] = BM_file
+        
+        return result
+    
+    def get_all_Basis_files(self) -> Dict[str, Path]:
+        """
+        Get all Basis files (ending with -Basis.gdx) from all scenarios.
+        
+        Returns:
+            Dictionary mapping scenario names to their Basis file paths
+        """
+        result = {}
+        for scenario_name, config in self.scenarios.items():
+            Basis_file = config.Basis_path
+            if Basis_file:
+                result[scenario_name] = Basis_file
+        
+        return result
+    
     def get_all_input_files(self) -> Dict[str, Path]:
         """
         Get all input files (ending with -input.gdx) from all scenarios.
@@ -290,9 +335,6 @@ class ScenarioManager:
     def get_all_output_year_files(self) -> Dict[str, Path]:
         """
         Get output-year files from all scenarios.
-        
-        Args:
-            year: Specific year to get (if None, returns all output-year files)
             
         Returns:
             Dictionary mapping scenario names to file paths
@@ -395,10 +437,15 @@ class ScenarioManager:
             for name, config in sorted(self.scenarios.items()):
                 lines.append(f"  • {name}")
                 lines.append(f"    - Path: {config.path}")
-                lines.append(f"    - Balopt: {config.balopt_path.name}")
                 lines.append(f"    - Total GDX Files: {len(config.gdx_files)}")
                 
                 # Show categorized files
+                if config.BM_path:
+                    lines.append(f"      ↳ BM file: {config.BM_path.name}")
+                
+                if config.Basis_path:
+                    lines.append(f"      ↳ Basis file: {config.Basis_path.name}")
+                
                 if config.input_path:
                     lines.append(f"      ↳ Input file: {config.input_path.name}")
                 
@@ -432,6 +479,7 @@ class ScenarioManager:
         print("\n".join(lines))
 
 
+
 if __name__ == "__main__":
     # Example usage
     
@@ -446,6 +494,9 @@ if __name__ == "__main__":
         scenario_name = next(iter(manager.scenarios_names))
         scenario = manager.scenarios[scenario_name]
         print(f"Scenario: {scenario.name}")
+        print(f"  Balopt file: {scenario.balopt_path.name}")
+        print(f"  BM file: {scenario.BM_path.name if scenario.BM_path else 'None'}")
+        print(f"  Basis file: {scenario.Basis_path.name if scenario.Basis_path else 'None'}")
         print(f"  Input file: {scenario.input_path.name if scenario.input_path else 'None'}")
         print(f"  Output file: {scenario.output_path.name if scenario.output_path else 'None'}")
         print(f"  Output years: {scenario.output_years}")
